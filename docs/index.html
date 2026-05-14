@@ -140,7 +140,7 @@
   <li>Диапазон тестирования — N от 10<sup>5</sup> до 10<sup>11</sup>.</li>
   <li>Точный <code>uniqExact</code> / <code>count(DISTINCT)</code> упирается в OOM при N&nbsp;≥&nbsp;10<sup>9</sup> на 8 GB хосте; до 10<sup>8</sup> работает (4.3 с).</li>
   <li>На N&nbsp;=&nbsp;10<sup>11</sup> дефолтный <code>uniq()</code> детерминированно ломается: возвращает константу 2<sup>64</sup>&nbsp;−&nbsp;95&nbsp;265&nbsp;423&nbsp;098&nbsp;≈&nbsp;1.84×10<sup>19</sup> независимо от хеш-сида и входа.</li>
-  <li>Корректно работает только <code>uniqCombined64</code> — относительная ошибка +0.098% на 10<sup>11</sup>.</li>
+  <li>Корректно работает только <code>uniqCombined64</code>: на 10<sup>11</sup> по 5 солям ошибка с mean +0.049%, stderr 0.20%, диапазон −0.22% … +0.32%.</li>
   <li><code>uniqCombined64</code> медленнее <code>uniq</code> в 4–5× на больших N (на 10<sup>11</sup> — 638 с против 138 с) и устойчиво точнее по разбросу: stderr 0.24–0.36% против 0.33–0.51% у <code>uniq</code> — соответствует теории (HLL17: 1.04/√131072 ≈ 0.29%; K-min-values с K=65536: 1/√K ≈ 0.39%).</li>
 </ul>
 
