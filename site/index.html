@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Три способа COUNT(DISTINCT) в ClickHouse — замер</title>
+<meta name="description" content="Эмпирический замер uniq(), uniqCombined64() и uniqExact() в ClickHouse на N от 10^5 до 10^11 — время и точность.">
+<style>
+  :root {
+    --bg: #fbfbf9;
+    --fg: #1c1c1c;
+    --muted: #5c5c5c;
+    --rule: #d8d6d0;
+    --accent: #b1361e;
+    --accent-soft: #fbe9e3;
+    --good: #2f6a31;
+    --good-soft: #e3efe4;
+    --warn: #8a6a00;
+    --warn-soft: #fff4d6;
+    --code-bg: #f1efe9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #18181a;
+      --fg: #e7e5e0;
+      --muted: #9a9892;
+      --rule: #313134;
+      --accent: #e88c75;
+      --accent-soft: #3d201a;
+      --good: #92c894;
+      --good-soft: #1f2f20;
+      --warn: #f0c060;
+      --warn-soft: #3a2f10;
+      --code-bg: #232326;
+    }
+  }
+  html, body { background: var(--bg); color: var(--fg); }
+  body {
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter",
+          system-ui, sans-serif;
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 48px 24px 96px;
+  }
+  h1 {
+    font-size: 1.85rem; line-height: 1.2; margin: 0 0 0.6rem;
+    letter-spacing: -0.01em;
+  }
+  h2 {
+    font-size: 1.2rem; margin: 2.6rem 0 0.6rem;
+    border-bottom: 1px solid var(--rule); padding-bottom: 0.3rem;
+  }
+  h3 { font-size: 1.0rem; margin: 1.8rem 0 0.4rem; color: var(--muted); font-weight: 600; }
+  .lede { color: var(--muted); margin: 0 0 1.5rem; font-size: 0.97rem; }
+  p { margin: 0.6rem 0; }
+  a { color: var(--accent); text-decoration: none; border-bottom: 1px dotted; }
+  a:hover { border-bottom-style: solid; }
+  code, pre {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.86rem;
+  }
+  code { background: var(--code-bg); padding: 0.05em 0.35em; border-radius: 3px; }
+  pre {
+    background: var(--code-bg); padding: 0.8rem 1rem; border-radius: 5px;
+    overflow-x: auto; line-height: 1.4;
+  }
+  pre code { background: transparent; padding: 0; }
+  table {
+    width: 100%; border-collapse: collapse; margin: 0.6rem 0 1.2rem;
+    font-size: 0.91rem;
+  }
+  th, td { padding: 0.4rem 0.5rem; text-align: right; border-bottom: 1px solid var(--rule); }
+  th:first-child, td:first-child { text-align: left; }
+  th { font-weight: 600; color: var(--muted); font-size: 0.83rem; }
+  td.bad { color: var(--accent); font-weight: 600; }
+  td.warn { color: var(--warn); font-weight: 600; }
+  td.good { color: var(--good); }
+  td.dim { color: var(--muted); }
+  .pill {
+    display: inline-block; padding: 0.05em 0.5em; border-radius: 10px;
+    font-size: 0.78rem; font-weight: 600;
+  }
+  .pill.bad { background: var(--accent-soft); color: var(--accent); }
+  .pill.warn { background: var(--warn-soft); color: var(--warn); }
+  .pill.good { background: var(--good-soft); color: var(--good); }
+  ul.lead-bullets {
+    padding-left: 1.4rem; margin: 1.2rem 0 1.4rem;
+  }
+  ul.lead-bullets li { margin: 0.4rem 0; }
+  details {
+    margin: 0.8rem 0 1.4rem;
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    background: var(--code-bg);
+  }
+  details > summary {
+    cursor: pointer; padding: 0.55rem 0.85rem;
+    font-weight: 600; font-size: 0.92rem;
+    color: var(--muted);
+    list-style: none;
+    user-select: none;
+  }
+  details > summary::-webkit-details-marker { display: none; }
+  details > summary::before {
+    content: "▸ ";
+    display: inline-block;
+    transition: transform 0.12s ease;
+    color: var(--accent);
+  }
+  details[open] > summary::before {
+    transform: rotate(90deg);
+    transform-origin: 0.32em 0.55em;
+  }
+  details > summary:hover { color: var(--fg); }
+  details > .body {
+    padding: 0.1rem 1rem 0.9rem 1.6rem;
+    border-top: 1px solid var(--rule);
+  }
+  details > .body > p:first-child { margin-top: 0.7rem; }
+  details > .body > p:last-child { margin-bottom: 0.3rem; }
+  .footer-meta { color: var(--muted); font-size: 0.84rem; margin-top: 2.5rem;
+                 border-top: 1px solid var(--rule); padding-top: 1rem; }
+  ul { padding-left: 1.4rem; }
+  li { margin: 0.25rem 0; }
+  .smallnote { font-size: 0.86rem; color: var(--muted); }
+  .tablewrap { overflow-x: auto; }
+</style>
+</head>
+<body>
+
+<h1>Три способа посчитать <code>COUNT(DISTINCT)</code> в ClickHouse</h1>
+<p class="lede">
+  Измеряем <code>uniq()</code>, <code>uniqCombined64()</code> и
+  <code>uniqExact()</code> — время и точность на одном и том же single-host
+  кластере.
+</p>
+
+<h2 style="margin-top:1.4rem; border:none; padding:0;">Ключевые выводы</h2>
+<ul class="lead-bullets">
+  <li>Диапазон тестирования — N от 10<sup>5</sup> до 10<sup>11</sup>.</li>
+  <li>Точный <code>uniqExact</code> / <code>count(DISTINCT)</code> упирается в OOM при N&nbsp;≥&nbsp;10<sup>9</sup> на 8 GB хосте; до 10<sup>8</sup> работает (4.3 с).</li>
+  <li>На N&nbsp;=&nbsp;10<sup>11</sup> дефолтный <code>uniq()</code> детерминированно ломается: возвращает константу 2<sup>64</sup>&nbsp;−&nbsp;95&nbsp;265&nbsp;423&nbsp;098&nbsp;≈&nbsp;1.84×10<sup>19</sup> независимо от хеш-сида и входа.</li>
+  <li>Корректно работает только <code>uniqCombined64</code> (rel err +0.098% на 10<sup>11</sup>).</li>
+  <li><code>uniqCombined64</code> медленнее <code>uniq</code> примерно в 4–5× на больших N (на 10<sup>11</sup> — 638 с против 138 с) — но ошибается заметно меньше: на 10<sup>10</sup> rel err у <code>uniqCombined64</code> в десятки раз ближе к нулю.</li>
+</ul>
+
+<details>
+  <summary>Общая методология</summary>
+  <div class="body">
+    <p>
+      Все замеры — на одном single-host кластере Yandex Managed ClickHouse
+      (<code>c3-c4-m8</code>, 4 vCPU, 8 GB RAM, ClickHouse <code>25.8.22.28-yc.2</code>).
+      Кластер создаётся под эксперимент и удаляется в конце; общая стоимость
+      вычислений — меньше 200 ₽.
+    </p>
+    <p>
+      Входные значения генерируются на лету функцией <code>numbers_mt(N)</code>,
+      которая возвращает ровно N различных целых без записи на диск. То есть
+      истинное число различных значений известно и равно N по построению —
+      это и есть «правда», с которой мы сравниваем оценки.
+    </p>
+    <p>
+      Запросы выполняются по нативному протоколу ClickHouse через
+      <code>clickhouse-driver</code> на порту 9440 (TLS), все запросы по одному
+      персистентному соединению. На сторонe Yandex Managed ClickHouse с
+      публичным IP HTTPS-интерфейс (8443) на Windows-клиенте даёт зависания
+      на TLS-renegotiation — для воспроизводимости лучше native TCP.
+    </p>
+    <p>
+      Каждый запрос — отдельная строка в <code>results/raw.csv</code> со всеми
+      параметрами (функция, N, соль, серверное время, абсолютная и
+      относительная ошибка, число попыток). Сводные таблицы ниже выведены из
+      этих строк.
+    </p>
+  </div>
+</details>
+
+<h2>Время выполнения трёх функций</h2>
+
+<details>
+  <summary>Методика этого замера + ссылки на код и сырые данные</summary>
+  <div class="body">
+    <p>
+      По одному запросу на каждую пару (N, функция). Фиксируем серверное время
+      (из <code>last_query.elapsed</code> драйвера) и относительную ошибку.
+      <code>uniqExact</code> запускался только до N=10<sup>9</sup>, где сервер
+      уже отдаёт OOM-ошибку и закрывает соединение.
+    </p>
+<pre><code>SELECT uniq(number)            FROM numbers_mt(N);
+SELECT uniqCombined64(number)  FROM numbers_mt(N);
+SELECT uniqExact(number)       FROM numbers_mt(N);</code></pre>
+    <p>
+      <a href="https://github.com/giffok/clickhouse-uniq-accuracy/blob/main/scripts/run-experiment.py">scripts/run-experiment.py</a>
+      — единый Python-скрипт всего прогона.
+      <a href="https://github.com/giffok/clickhouse-uniq-accuracy/blob/main/results/raw.csv">results/raw.csv</a>
+      — все строки (фильтр <code>experiment=A_unsalted</code> для этой таблицы,
+      <code>experiment=A_exact</code> для uniqExact).
+    </p>
+  </div>
+</details>
+
+<div class="tablewrap">
+<table>
+  <thead>
+    <tr>
+      <th>N</th>
+      <th colspan="2"><code>uniq()</code></th>
+      <th colspan="2"><code>uniqCombined64()</code></th>
+      <th colspan="2"><code>uniqExact()</code></th>
+    </tr>
+    <tr>
+      <th></th>
+      <th>время</th><th>отн. ошибка</th>
+      <th>время</th><th>отн. ошибка</th>
+      <th>время</th><th>отн. ошибка</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>10<sup>5</sup></td>
+      <td>0.10 с</td><td class="good">+0.315%</td>
+      <td>0.10 с</td><td class="good">+0.314%</td>
+      <td>0.10 с</td><td class="good">0%</td>
+    </tr>
+    <tr>
+      <td>10<sup>6</sup></td>
+      <td>0.11 с</td><td class="good">+0.194%</td>
+      <td>0.11 с</td><td class="good">+0.115%</td>
+      <td>0.13 с</td><td class="good">0%</td>
+    </tr>
+    <tr>
+      <td>10<sup>7</sup></td>
+      <td>0.13 с</td><td class="good">−0.161%</td>
+      <td>0.18 с</td><td class="good">+0.220%</td>
+      <td>0.48 с</td><td class="good">0%</td>
+    </tr>
+    <tr>
+      <td>10<sup>8</sup></td>
+      <td>0.25 с</td><td class="good">−0.048%</td>
+      <td>0.84 с</td><td class="good">−0.096%</td>
+      <td>4.35 с</td><td class="good">0%</td>
+    </tr>
+    <tr>
+      <td>10<sup>9</sup></td>
+      <td>1.88 с</td><td class="good">+0.180%</td>
+      <td>7.62 с</td><td class="good">−0.056%</td>
+      <td class="bad">OOM</td><td class="bad">—</td>
+    </tr>
+    <tr>
+      <td>10<sup>10</sup></td>
+      <td>16.4 с</td><td class="warn">+1.077%</td>
+      <td>64.6 с</td><td class="good">−0.014%</td>
+      <td class="bad">OOM</td><td class="bad">—</td>
+    </tr>
+    <tr>
+      <td>10<sup>11</sup></td>
+      <td>137.9 с</td><td class="bad">overflow ⚠</td>
+      <td>638.2 с</td><td class="good">+0.098%</td>
+      <td class="bad">OOM</td><td class="bad">—</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<p class="smallnote">
+«OOM» — превышение <code>max_memory_usage</code> на 8 GB хосте; сервер
+закрывает соединение. На машинах с большей памятью граница сдвигается
+примерно как N&nbsp;≈&nbsp;RAM&nbsp;÷&nbsp;16 байт.
+</p>
+
+<h2>Распределение точности — uniq и uniqCombined64</h2>
+
+<details>
+  <summary>Методика этого замера + ссылки на код и сырые данные</summary>
+  <div class="body">
+    <p>
+      Чтобы получить распределение ошибки, оборачиваем вход в солёный хеш:
+      <code>uniq(cityHash64(number, salt))</code> с <code>salt</code> =
+      1…m(N). Каждая соль даёт независимую оценку для одной и той же истинной
+      мощности N. По m запускам считаем mean, stderr, квантили.
+    </p>
+<pre><code>SELECT uniq(cityHash64(number, 42))           FROM numbers_mt(N);
+SELECT uniqCombined64(cityHash64(number, 42)) FROM numbers_mt(N);</code></pre>
+    <p>
+      m уменьшается с ростом N, чтобы прогон укладывался в разумное время.
+      Для <code>uniq</code>: 100, 100, 100, 100, 100, 30, 5.
+      Для <code>uniqCombined64</code>: 100, 100, 100, 100, 30, 10, 5.
+    </p>
+    <p>
+      <a href="https://github.com/giffok/clickhouse-uniq-accuracy/blob/main/scripts/run-experiment.py">scripts/run-experiment.py</a>
+      — тот же скрипт.
+      <a href="https://github.com/giffok/clickhouse-uniq-accuracy/blob/main/results/raw.csv">results/raw.csv</a>
+      — все строки (фильтр <code>experiment=B_salted</code>).
+    </p>
+    <p class="smallnote">
+      Алгоритмы внутри разные: <code>uniq</code> — K-min-values
+      (adaptive sampling), хранит K=65536 минимальных хешей →
+      теоретический stderr ≈ 1/√K ≈ 0.39%. <code>uniqCombined64</code> —
+      HyperLogLog с precision=17 по умолчанию (2<sup>17</sup>=131072 ячеек) →
+      теоретический stderr ≈ 1.04/√131072 ≈ 0.29%. Поэтому
+      <code>uniqCombined64</code> «по бумаге» должен быть точнее
+      <code>uniq</code> — и наши данные это подтверждают.
+      <code>uniqHLL12</code> — отдельная функция, использует HLL12
+      (2<sup>12</sup>=4096 ячеек) → теоретический stderr ≈ 1.625%, поэтому
+      она и не используется в качестве дефолта.
+    </p>
+  </div>
+</details>
+
+<h3><code>uniq()</code></h3>
+
+<div class="tablewrap">
+<table>
+  <thead>
+    <tr>
+      <th>N</th><th>m</th><th>mean</th><th>stderr</th>
+      <th>min</th><th>p5</th><th>p50</th><th>p95</th><th>max</th>
+      <th>overflow</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td>10<sup>5</sup></td><td>100</td><td class="good">+0.023%</td><td>0.328%</td><td>−0.696%</td><td>−0.467%</td><td>−0.039%</td><td>+0.516%</td><td>+0.760%</td><td>0</td></tr>
+    <tr><td>10<sup>6</sup></td><td>100</td><td class="good">−0.052%</td><td>0.346%</td><td>−0.858%</td><td>−0.581%</td><td>−0.058%</td><td>+0.543%</td><td>+0.726%</td><td>0</td></tr>
+    <tr><td>10<sup>7</sup></td><td>100</td><td class="good">−0.012%</td><td>0.487%</td><td>−1.256%</td><td>−0.765%</td><td>+0.038%</td><td>+0.780%</td><td>+1.166%</td><td>0</td></tr>
+    <tr><td>10<sup>8</sup></td><td>100</td><td class="good">+0.035%</td><td>0.441%</td><td>−1.062%</td><td>−0.657%</td><td>+0.020%</td><td>+0.725%</td><td>+1.346%</td><td>0</td></tr>
+    <tr><td>10<sup>9</sup></td><td>100</td><td class="good">+0.088%</td><td>0.413%</td><td>−0.791%</td><td>−0.578%</td><td>+0.119%</td><td>+0.689%</td><td>+1.225%</td><td>0</td></tr>
+    <tr><td>10<sup>10</sup></td><td>30</td><td class="good">+0.029%</td><td>0.512%</td><td>−1.019%</td><td>−0.816%</td><td>−0.054%</td><td>+0.882%</td><td>+1.171%</td><td>0</td></tr>
+    <tr><td>10<sup>11</sup></td><td>5</td><td class="bad">— overflow —</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td class="bad">5/5</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3><code>uniqCombined64()</code></h3>
+
+<div class="tablewrap">
+<table>
+  <thead>
+    <tr>
+      <th>N</th><th>m</th><th>mean</th><th>stderr</th>
+      <th>min</th><th>p5</th><th>p50</th><th>p95</th><th>max</th>
+      <th>overflow</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td>10<sup>5</sup></td><td>100</td><td class="good">+0.006%</td><td>0.239%</td><td>−0.511%</td><td>−0.346%</td><td>+0.001%</td><td>+0.429%</td><td>+0.723%</td><td>0</td></tr>
+    <tr><td>10<sup>6</sup></td><td>100</td><td class="good">+0.003%</td><td>0.270%</td><td>−0.606%</td><td>−0.449%</td><td>+0.006%</td><td>+0.478%</td><td>+0.756%</td><td>0</td></tr>
+    <tr><td>10<sup>7</sup></td><td>100</td><td class="good">+0.012%</td><td>0.294%</td><td>−0.764%</td><td>−0.446%</td><td>+0.029%</td><td>+0.523%</td><td>+0.790%</td><td>0</td></tr>
+    <tr><td>10<sup>8</sup></td><td>100</td><td class="good">+0.003%</td><td>0.286%</td><td>−0.685%</td><td>−0.549%</td><td>+0.058%</td><td>+0.364%</td><td>+0.706%</td><td>0</td></tr>
+    <tr><td>10<sup>9</sup></td><td>30</td><td class="good">−0.053%</td><td>0.238%</td><td>−0.449%</td><td>−0.376%</td><td>−0.081%</td><td>+0.398%</td><td>+0.486%</td><td>0</td></tr>
+    <tr><td>10<sup>10</sup></td><td>10</td><td class="good">+0.102%</td><td>0.355%</td><td>−0.331%</td><td>−0.283%</td><td>+0.053%</td><td>+0.704%</td><td>+0.890%</td><td>0</td></tr>
+    <tr><td>10<sup>11</sup></td><td>5</td><td class="good">+0.049%</td><td>0.201%</td><td>−0.223%</td><td>−0.190%</td><td>−0.037%</td><td>+0.304%</td><td>+0.320%</td><td>0</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p class="smallnote">
+Обе функции несмещённые (mean ≈ 0). Эмпирический stderr
+<code>uniqCombined64</code> — 0.24–0.29% — заметно и устойчиво меньше,
+чем у <code>uniq</code> (0.33–0.51%): согласуется с теорией (HLL17 даёт
+~0.29% против ~0.39% у K-min-values). Плюс <code>uniqCombined64</code>
+остаётся точным на N=10<sup>11</sup>, где <code>uniq()</code> переполняется.
+</p>
+
+<details>
+  <summary>Что происходит на N = 10<sup>11</sup> подробнее</summary>
+  <div class="body">
+    <p>
+      <code>uniq()</code> возвращает <strong>18 446 743 978 444 128 518</strong>
+      (= 2<sup>64</sup>&nbsp;−&nbsp;95 265 423 098) для любого входа.
+      Не зависит ни от хеш-сида, ни от повторного запуска, ни от того,
+      прехешируем ли мы вход. Похоже на overflow беззнакового счётчика при
+      слиянии партиальных состояний агрегации между потоками, которые
+      порождает <code>numbers_mt</code>.
+    </p>
+    <p>
+      У 32-битных «братьев» — другой режим отказа: они не переполняются,
+      а упираются в потолок. <code>uniqHLL12</code> и <code>uniqCombined</code>
+      (32-битная версия) выходят на насыщение ~6.2&nbsp;млрд — это
+      практический потолок 32-битного (2<sup>32</sup>) хеш-пространства,
+      когда все ячейки заполнены.
+    </p>
+    <div class="tablewrap">
+    <table>
+      <thead>
+        <tr><th>оценщик</th><th>результат на N=10<sup>11</sup></th><th>отн. ошибка</th><th>вердикт</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>uniq</code></td><td>18 446 743 978 444 128 518</td><td class="bad">+1.84×10<sup>8</sup></td><td><span class="pill bad">overflow</span></td></tr>
+        <tr><td><code>uniqHLL12</code></td><td>6 194 288 074</td><td class="bad">−93.81%</td><td><span class="pill bad">saturated</span></td></tr>
+        <tr><td><code>uniqCombined</code></td><td>6 195 868 816</td><td class="bad">−93.80%</td><td><span class="pill bad">saturated</span></td></tr>
+        <tr><td><code>uniqCombined64</code></td><td>100 097 891 658</td><td class="good">+0.098%</td><td><span class="pill good">correct</span></td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p class="smallnote">
+      Практический вывод: для колонок, где число различных значений может
+      реально превысить ~10<sup>9</sup>, безопасный выбор по умолчанию —
+      <code>uniqCombined64()</code>. Все 32-битные оценщики начинают врать
+      выше миллиарда, но только <code>uniq</code> ломается катастрофически
+      и молча.
+    </p>
+  </div>
+</details>
+
+<div class="footer-meta">
+  ClickHouse: <code>25.8.22.28-yc.2</code>.
+  Кластер: 1 хост <code>c3-c4-m8</code>, 4 vCPU / 8 GB / 10 GB network-ssd, публичный IP.
+  Дата прогона: <code>2026-05-14</code>.
+  Полный разбор: <a href="https://github.com/giffok/clickhouse-uniq-accuracy/blob/main/results/analysis.md">results/analysis.md</a>.
+</div>
+
+</body>
+</html>

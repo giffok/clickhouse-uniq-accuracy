@@ -1,0 +1,10 @@
+.env
+*.key
+# Yandex CA cert is public and needed for reproduction — keep it
+!YandexInternalRootCA.crt
+
+# Local preview artefacts and scratch
+site/preview-*.png
+
+# Preliminary results from iterative debugging — not the published run
+results/v1-prelim/
