@@ -293,12 +293,15 @@ SELECT uniqCombined64(cityHash64(number, 42)) FROM numbers_mt(N);</code></pre>
       — все строки (фильтр <code>experiment=B_salted</code>).
     </p>
     <p class="smallnote">
-      Алгоритмы внутри разные: <code>uniq</code> — K-min-values
-      (adaptive sampling), хранит K=65536 минимальных хешей →
-      теоретический stderr ≈ 1/√K ≈ 0.39%. <code>uniqCombined64</code> —
-      HyperLogLog с precision=17 по умолчанию (2<sup>17</sup>=131072 ячеек) →
-      теоретический stderr ≈ 1.04/√131072 ≈ 0.29%. Поэтому
-      <code>uniqCombined64</code> «по бумаге» должен быть точнее
+      Алгоритмы внутри разные. <code>uniq</code> — по
+      <a href="https://clickhouse.com/docs/sql-reference/aggregate-functions/reference/uniq">официальной документации ClickHouse</a>
+      «adaptive sampling», хранит до 65536 сэмплированных hash-значений
+      (KMV-подобный оценщик; документация не называет его K-min-values).
+      Ожидаемый масштаб случайной ошибки грубо порядка 1/√65536 ≈ 0.39% —
+      это эвристическая оценка, а не официальный bound ClickHouse.
+      <code>uniqCombined64</code> — HyperLogLog с precision=17 по умолчанию
+      (2<sup>17</sup>=131072 ячеек) → теоретический stderr ≈ 1.04/√131072 ≈ 0.29%.
+      Поэтому <code>uniqCombined64</code> «по бумаге» должен быть точнее
       <code>uniq</code> — и наши данные это подтверждают.
       <code>uniqHLL12</code> — отдельная функция, использует HLL12
       (2<sup>12</sup>=4096 ячеек) → теоретический stderr ≈ 1.625%, поэтому
@@ -356,9 +359,10 @@ SELECT uniqCombined64(cityHash64(number, 42)) FROM numbers_mt(N);</code></pre>
 <p class="smallnote">
 Обе функции несмещённые (mean ≈ 0). Эмпирический stderr
 <code>uniqCombined64</code> — 0.24–0.29% — заметно и устойчиво меньше,
-чем у <code>uniq</code> (0.33–0.51%): согласуется с теорией (HLL17 даёт
-~0.29% против ~0.39% у K-min-values). Плюс <code>uniqCombined64</code>
-остаётся точным на N=10<sup>11</sup>, где <code>uniq()</code> переполняется.
+чем у <code>uniq</code> (0.33–0.51%): согласуется с грубой √K-эвристикой
+(HLL17 даёт ~0.29% против ~0.39% у adaptive sampling до 65536 хешей).
+Плюс <code>uniqCombined64</code> остаётся точным на N=10<sup>11</sup>,
+где <code>uniq()</code> переполняется.
 </p>
 
 <details>
