@@ -2,7 +2,7 @@
 
 Эмпирический замер точности и времени трёх оценщиков мощности множества в ClickHouse — `uniq()`, `uniqCombined64()`, `uniqExact()` / `count(DISTINCT)` — на N от 10⁵ до 10¹¹.
 
-- **Лендинг**: [site/index.html](site/index.html) (опубликован через GitHub Pages)
+- **Лендинг**: [docs/index.html](docs/index.html) (опубликован через GitHub Pages на https://giffok.github.io/clickhouse-uniq-accuracy/)
 - **Полный разбор**: [results/analysis.md](results/analysis.md)
 - **Сырые данные**: [results/raw.csv](results/raw.csv) — одна строка на каждый запрос, все хеш-сиды
 - **Лог стоимости / времени**: [results/cost-log.md](results/cost-log.md)
@@ -50,8 +50,8 @@ results/
   raw.csv                  # одна строка на запрос — все экспери­менты
   analysis.md              # long-form разбор
   cost-log.md              # хронология аренды и стоимость
-site/
-  index.html               # лендинг с ключевыми таблицами
+docs/
+  index.html               # лендинг с ключевыми таблицами (GitHub Pages source)
 YandexInternalRootCA.crt   # CA-сертификат для TLS YC (публичный)
 ```
 

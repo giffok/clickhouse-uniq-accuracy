@@ -4,7 +4,7 @@
 !YandexInternalRootCA.crt
 
 # Local preview artefacts and scratch
-site/preview-*.png
+docs/preview-*.png
 
 # Preliminary results from iterative debugging — not the published run
 results/v1-prelim/
