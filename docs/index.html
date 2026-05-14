@@ -370,7 +370,9 @@ SELECT uniqCombined64(cityHash64(number, 42)) FROM numbers_mt(N);</code></pre>
       Не зависит ни от хеш-сида, ни от повторного запуска, ни от того,
       прехешируем ли мы вход. Похоже на overflow беззнакового счётчика при
       слиянии партиальных состояний агрегации между потоками, которые
-      порождает <code>numbers_mt</code>.
+      порождает <code>numbers_mt</code>. Известный баг ClickHouse:
+      <a href="https://github.com/ClickHouse/ClickHouse/issues/6078">issue&nbsp;#6078 «Avoid overflow in aggregate function uniq»</a>
+      (открыт с июля 2019, без фикса на момент замера).
     </p>
     <p>
       У 32-битных «братьев» — другой режим отказа: они не переполняются,
