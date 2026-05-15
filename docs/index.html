@@ -182,7 +182,8 @@
   <div class="body">
     <p>
       По одному запросу на каждую пару (N, функция). Фиксируем серверное время
-      (из <code>last_query.elapsed</code> драйвера) и относительную ошибку.
+      (из <code>last_query.elapsed</code> драйвера) и сверяем результат с
+      истинным N — так и виден overflow у <code>uniq()</code> на 10<sup>11</sup>.
       <code>uniqExact</code> запускался только до N=10<sup>9</sup>, где сервер
       уже отдаёт OOM-ошибку и закрывает соединение.
     </p>
@@ -204,59 +205,53 @@ SELECT uniqExact(number)       FROM numbers_mt(N);</code></pre>
   <thead>
     <tr>
       <th>N</th>
-      <th colspan="2"><code>uniq()</code></th>
-      <th colspan="2"><code>uniqCombined64()</code></th>
-      <th colspan="2"><code>uniqExact()</code></th>
-    </tr>
-    <tr>
-      <th></th>
-      <th>время</th><th>отн. ошибка</th>
-      <th>время</th><th>отн. ошибка</th>
-      <th>время</th><th>отн. ошибка</th>
+      <th><code>uniq()</code></th>
+      <th><code>uniqCombined64()</code></th>
+      <th><code>uniqExact()</code></th>
     </tr>
   </thead>
   <tbody>
     <tr>
       <td>10<sup>5</sup></td>
-      <td>0.10 с</td><td class="good">+0.315%</td>
-      <td>0.10 с</td><td class="good">+0.314%</td>
-      <td>0.10 с</td><td class="good">0%</td>
+      <td>0.10 с</td>
+      <td>0.10 с</td>
+      <td>0.10 с</td>
     </tr>
     <tr>
       <td>10<sup>6</sup></td>
-      <td>0.11 с</td><td class="good">+0.194%</td>
-      <td>0.11 с</td><td class="good">+0.115%</td>
-      <td>0.13 с</td><td class="good">0%</td>
+      <td>0.11 с</td>
+      <td>0.11 с</td>
+      <td>0.13 с</td>
     </tr>
     <tr>
       <td>10<sup>7</sup></td>
-      <td>0.13 с</td><td class="good">−0.161%</td>
-      <td>0.18 с</td><td class="good">+0.220%</td>
-      <td>0.48 с</td><td class="good">0%</td>
+      <td>0.13 с</td>
+      <td>0.18 с</td>
+      <td>0.48 с</td>
     </tr>
     <tr>
       <td>10<sup>8</sup></td>
-      <td>0.25 с</td><td class="good">−0.048%</td>
-      <td>0.84 с</td><td class="good">−0.096%</td>
-      <td>4.35 с</td><td class="good">0%</td>
+      <td>0.25 с</td>
+      <td>0.84 с</td>
+      <td>4.35 с</td>
     </tr>
     <tr>
       <td>10<sup>9</sup></td>
-      <td>1.88 с</td><td class="good">+0.180%</td>
-      <td>7.62 с</td><td class="good">−0.056%</td>
-      <td class="bad">OOM</td><td class="bad">—</td>
+      <td>1.88 с</td>
+      <td>7.62 с</td>
+      <td class="bad">OOM</td>
     </tr>
     <tr>
       <td>10<sup>10</sup></td>
-      <td>16.4 с</td><td class="warn">+1.077%</td>
-      <td>64.6 с</td><td class="good">−0.014%</td>
-      <td class="bad">OOM</td><td class="bad">—</td>
+      <td>16.4 с</td>
+      <td>64.6 с</td>
+      <td class="bad">OOM</td>
     </tr>
     <tr>
       <td>10<sup>11</sup></td>
-      <td>137.9 с</td><td class="bad">overflow ⚠</td>
-      <td>638.2 с</td><td class="good">+0.098%</td>
-      <td class="bad">OOM</td><td class="bad">—</td>
+      <td>137.9 с&nbsp;<span class="pill bad">overflow</span></td>
+      <td>638.2 с</td>
+      <td class="bad">OOM</td>
     </tr>
   </tbody>
 </table>
@@ -266,6 +261,10 @@ SELECT uniqExact(number)       FROM numbers_mt(N);</code></pre>
 «OOM» — превышение <code>max_memory_usage</code> на 8 GB хосте; сервер
 закрывает соединение. На машинах с большей памятью граница сдвигается
 примерно как N&nbsp;≈&nbsp;RAM&nbsp;÷&nbsp;16 байт.
+Метка «overflow» у <code>uniq()</code> на N&nbsp;=&nbsp;10<sup>11</sup>:
+запрос отрабатывает за 137.9 с, но возвращает не оценку мощности, а
+константу&nbsp;≈&nbsp;1.84×10<sup>19</sup> — тихое переполнение
+(подробный разбор — в блоке ниже).
 </p>
 
 <h2>Распределение точности — uniq и uniqCombined64</h2>
